@@ -300,10 +300,39 @@ fi
 check_ports
 check_net
 
+write_htpasswd() {
+  local hash rc out
+  if out=$(htpasswd -nbB admin "${HT_PASSWORD}" 2>&1); then
+    hash="$out"
+  else
+    rc=$?
+    warn "htpasswd could not hash the password with bcrypt (exit ${rc}); falling back to md5"
+    note "${out}"
+    if out=$(htpasswd -nb admin "${HT_PASSWORD}" 2>&1); then
+      hash="$out"
+    else
+      rc=$?
+      err "htpasswd failed (exit ${rc}); cannot write the basic auth file"
+      note "${out}"
+      exit 1
+    fi
+  fi
+  if ! printf '%s\n' "$hash" > "${RUNTIME_DIR}/htpasswd"; then
+    err "cannot write ${RUNTIME_DIR}/htpasswd as uid=${UID_IN}"
+    exit 1
+  fi
+  chmod 600 "${RUNTIME_DIR}/htpasswd"
+}
+
 info "preflight complete; launching services"
 
-htpasswd -nbB admin "${HT_PASSWORD}" > "${RUNTIME_DIR}/htpasswd"
-chmod 600 "${RUNTIME_DIR}/htpasswd"
+write_htpasswd
+
+if ! out=$(nginx -p /etc/nginx -c nginx.conf -t 2>&1); then
+  err "nginx rejected its configuration; refusing to start"
+  note "${out}"
+  exit 1
+fi
 
 if [ "$#" -gt 0 ]; then
   exec "$@"
@@ -318,6 +347,13 @@ php_fpm_pid=$!
 exit_code=0
 wait -n || exit_code=$?
 
+if kill -0 "$nginx_pid" 2>/dev/null; then
+  err "php-fpm exited (status ${exit_code}); shutting down"
+else
+  err "nginx exited (status ${exit_code}); shutting down"
+fi
+
 kill "$nginx_pid" "$php_fpm_pid" 2>/dev/null || true
+wait "$nginx_pid" "$php_fpm_pid" 2>/dev/null || true
 
 exit "$exit_code"
