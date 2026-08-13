@@ -6,7 +6,7 @@ APP=h5ai
 PORTS_INTERNAL="8080"
 EXEC_MOUNTS=""
 REQUIRED_RW=""
-ENV_REPORT="HT_PASSWORD TZ PREFLIGHT_NET_CHECK"
+ENV_REPORT="HT_PASSWORD BASE_PATH TZ PREFLIGHT_NET_CHECK"
 ENV_SECRET="HT_PASSWORD"
 NET_DNS_TARGET="cloudflare.com"
 NET_TCP_TARGET="1.1.1.1:443"
@@ -220,6 +220,24 @@ check_auth() {
   info "basic auth configured for user admin"
 }
 
+check_base_path() {
+  local raw="${BASE_PATH:-}"
+  BASE_PATH_NORM=""
+  if [ -z "$raw" ] || [ "$raw" = "/" ]; then
+    return 0
+  fi
+  raw="/${raw#/}"
+  raw="${raw%/}"
+  if ! printf '%s' "$raw" | grep -qE '^(/[A-Za-z0-9._~-]+)+$'; then
+    fail "BASE_PATH='${BASE_PATH}' is not a usable path prefix"
+    note "use a simple path like BASE_PATH=/files (letters, digits, dot, dash, underscore, tilde)"
+    return 0
+  fi
+  BASE_PATH_NORM="$raw"
+  info "serving under base path ${BASE_PATH_NORM}/"
+  note "your reverse proxy must forward this prefix unchanged; do not strip it before proxying"
+}
+
 check_runtime_dir() {
   if ! mkdir -p "${RUNTIME_DIR}" 2>/dev/null; then
     fail "cannot create ${RUNTIME_DIR} as uid=${UID_IN}; nginx, php-fpm and the auth file live there"
@@ -279,6 +297,7 @@ check_caps
 check_clock
 report_env
 check_auth
+check_base_path
 check_runtime_dir
 check_cache
 
@@ -324,8 +343,69 @@ write_htpasswd() {
   chmod 600 "${RUNTIME_DIR}/htpasswd"
 }
 
+write_server_conf() {
+  local conf="${RUNTIME_DIR}/server.conf"
+  if [ -z "${BASE_PATH_NORM}" ]; then
+    cat > "$conf" <<'EOF'
+server {
+    listen 8080;
+    server_name _;
+    root /app;
+    charset utf-8;
+
+    auth_basic "auth";
+    auth_basic_user_file /tmp/h5ai/htpasswd;
+
+    index /_h5ai/public/index.php;
+
+    location ^~ /_h5ai/private/ { deny all; }
+
+    location / {
+        try_files $uri $uri/ /_h5ai/public/index.php?$args;
+    }
+
+    location ~ \.php$ {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_pass unix:/tmp/h5ai/php-fpm.sock;
+    }
+}
+EOF
+  else
+    cat > "$conf" <<EOF
+server {
+    listen 8080;
+    server_name _;
+    charset utf-8;
+
+    auth_basic "auth";
+    auth_basic_user_file /tmp/h5ai/htpasswd;
+
+    location = ${BASE_PATH_NORM} { return 301 ${BASE_PATH_NORM}/; }
+
+    location ^~ ${BASE_PATH_NORM}/ {
+        alias /app/;
+
+        index ${BASE_PATH_NORM}/_h5ai/public/index.php;
+
+        location ^~ ${BASE_PATH_NORM}/_h5ai/private/ { deny all; }
+
+        location ~ ^${BASE_PATH_NORM}/(?<h5ai_script>.+\.php)\$ {
+            include fastcgi_params;
+            fastcgi_param SCRIPT_FILENAME /app/\$h5ai_script;
+            fastcgi_pass unix:/tmp/h5ai/php-fpm.sock;
+        }
+
+        try_files \$uri \$uri/ ${BASE_PATH_NORM}/_h5ai/public/index.php?\$args;
+    }
+}
+EOF
+  fi
+}
+
 info "preflight complete; launching services"
 
+write_server_conf
 write_htpasswd
 
 if ! out=$(nginx -p /etc/nginx -c nginx.conf -t 2>&1); then
