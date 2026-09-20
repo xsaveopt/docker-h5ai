@@ -281,44 +281,6 @@ collect_mounts() {
   done < <(awk '{ s=0; for(i=1;i<=NF;i++) if($i=="-"){s=i;break} if(s) print $5 "\t" $(s+1) }' /proc/self/mountinfo 2>/dev/null)
 }
 
-info "starting preflight checks"
-if [ "${UID_IN}" = "0" ]; then
-  warn "running as uid=0 (root); this image is built to run unprivileged"
-else
-  note "all processes run as uid=${UID_IN} gid=${GID_IN} (non-root)"
-fi
-if [ "${USERNS}" = "1" ]; then
-  warn "user namespace remapping is active (rootless docker or userns-remap)"
-  note "inside uid=${UID_IN} maps to HOST uid=${HOST_UID}; inside gid=${GID_IN} maps to HOST gid=${HOST_GID}"
-  note "when fixing bind-mount ownership on the host, chown to the HOST ids above, not ${UID_IN}:${GID_IN}"
-fi
-
-check_caps
-check_clock
-report_env
-check_auth
-check_base_path
-check_runtime_dir
-check_cache
-
-collect_mounts
-for m in "${MOUNTS[@]}"; do
-  if is_required_rw "$m"; then label="required volume ${m}"; else label="bind mount ${m}"; fi
-  check_rw "$m" "$label"
-  check_perms "$m"
-  check_flags "$m"
-done
-
-if [ "${FATAL}" = "1" ]; then
-  err "preflight failed; refusing to start"
-  note "this container runs as a non-root user and does not change ownership of your mounts"
-  note "fix the problems shown above on the host, then restart"
-  exit 1
-fi
-
-check_ports
-check_net
-
 write_htpasswd() {
   local hash rc out
   if out=$(htpasswd -nbB admin "${HT_PASSWORD}" 2>&1); then
@@ -402,6 +364,48 @@ server {
 EOF
   fi
 }
+
+if [ "${ENTRYPOINT_SOURCE_ONLY:-0}" = "1" ]; then
+  return 0
+fi
+
+info "starting preflight checks"
+if [ "${UID_IN}" = "0" ]; then
+  warn "running as uid=0 (root); this image is built to run unprivileged"
+else
+  note "all processes run as uid=${UID_IN} gid=${GID_IN} (non-root)"
+fi
+if [ "${USERNS}" = "1" ]; then
+  warn "user namespace remapping is active (rootless docker or userns-remap)"
+  note "inside uid=${UID_IN} maps to HOST uid=${HOST_UID}; inside gid=${GID_IN} maps to HOST gid=${HOST_GID}"
+  note "when fixing bind-mount ownership on the host, chown to the HOST ids above, not ${UID_IN}:${GID_IN}"
+fi
+
+check_caps
+check_clock
+report_env
+check_auth
+check_base_path
+check_runtime_dir
+check_cache
+
+collect_mounts
+for m in "${MOUNTS[@]}"; do
+  if is_required_rw "$m"; then label="required volume ${m}"; else label="bind mount ${m}"; fi
+  check_rw "$m" "$label"
+  check_perms "$m"
+  check_flags "$m"
+done
+
+if [ "${FATAL}" = "1" ]; then
+  err "preflight failed; refusing to start"
+  note "this container runs as a non-root user and does not change ownership of your mounts"
+  note "fix the problems shown above on the host, then restart"
+  exit 1
+fi
+
+check_ports
+check_net
 
 info "preflight complete; launching services"
 
