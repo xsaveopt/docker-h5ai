@@ -35,4 +35,7 @@ RUN chmod +x /entrypoint.sh
 USER 33:33
 EXPOSE 8080
 
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["php", "-r", "$b=getenv('BASE_PATH');$p='/health';if($b!==false&&$b!==''&&$b!=='/'){$b='/'.ltrim($b,'/');$b=rtrim($b,'/');$p=$b.'/health';}$c=@file_get_contents('http://127.0.0.1:8080'.$p,false,stream_context_create(['http'=>['timeout'=>2,'ignore_errors'=>true]]));$h=$http_response_header[0]??'';exit(strpos($h,' 200 ')!==false?0:1);"]
+
 ENTRYPOINT ["/entrypoint.sh"]

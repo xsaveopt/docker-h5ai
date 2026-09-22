@@ -305,6 +305,10 @@ write_htpasswd() {
   chmod 600 "${RUNTIME_DIR}/htpasswd"
 }
 
+write_health_php() {
+  printf '<?php\necho "up";\n' > "${RUNTIME_DIR}/health.php"
+}
+
 write_server_conf() {
   local conf="${RUNTIME_DIR}/server.conf"
   if [ -z "${BASE_PATH_NORM}" ]; then
@@ -321,6 +325,20 @@ server {
     index /_h5ai/public/index.php;
 
     location ^~ /_h5ai/private/ { deny all; }
+
+    location = /health {
+        auth_basic off;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME /tmp/h5ai/health.php;
+        fastcgi_pass unix:/tmp/h5ai/php-fpm.sock;
+        error_page 502 504 = @health_degraded;
+    }
+
+    location @health_degraded {
+        auth_basic off;
+        default_type text/plain;
+        return 503 "degraded";
+    }
 
     location / {
         try_files $uri $uri/ /_h5ai/public/index.php?$args;
@@ -342,6 +360,25 @@ server {
 
     auth_basic "auth";
     auth_basic_user_file /tmp/h5ai/htpasswd;
+
+    location = ${BASE_PATH_NORM}/health {
+        auth_basic off;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME /tmp/h5ai/health.php;
+        fastcgi_pass unix:/tmp/h5ai/php-fpm.sock;
+        error_page 502 504 = @health_degraded;
+    }
+
+    location @health_degraded {
+        auth_basic off;
+        default_type text/plain;
+        return 503 "degraded";
+    }
+
+    location = /health {
+        auth_basic off;
+        return 404;
+    }
 
     location = ${BASE_PATH_NORM} { return 301 ${BASE_PATH_NORM}/; }
 
@@ -410,6 +447,7 @@ check_net
 info "preflight complete; launching services"
 
 write_server_conf
+write_health_php
 write_htpasswd
 
 if ! out=$(nginx -p /etc/nginx -c nginx.conf -t 2>&1); then

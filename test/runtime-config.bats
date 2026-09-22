@@ -214,6 +214,10 @@ base_path_case() {
   [[ $output == *"root /app;"* ]] || return 1
   [[ $output == *'try_files $uri $uri/ /_h5ai/public/index.php?$args;'* ]] || return 1
   [[ $output == *"location ^~ /_h5ai/private/ { deny all; }"* ]] || return 1
+  [[ $output == *"location = /health {"* ]] || return 1
+  [[ $output == *"auth_basic off;"* ]] || return 1
+  [[ $output == *'fastcgi_param SCRIPT_FILENAME /tmp/h5ai/health.php;'* ]] || return 1
+  [[ $output == *"return 503 \"degraded\";"* ]] || return 1
 }
 
 @test "write_server_conf serves under a base path prefix" {
@@ -233,4 +237,22 @@ base_path_case() {
   [[ $output == *'fastcgi_param SCRIPT_FILENAME /app/$h5ai_script;'* ]] || return 1
   [[ $output == *'try_files $uri $uri/ /files/_h5ai/public/index.php?$args;'* ]] || return 1
   [[ $output != *"root /app;"* ]] || return 1
+  [[ $output == *"location = /files/health {"* ]] || return 1
+  [[ $output == *"location = /health {"$'\n'"        auth_basic off;"$'\n'"        return 404;"* ]] || return 1
+  [[ $output == *'fastcgi_param SCRIPT_FILENAME /tmp/h5ai/health.php;'* ]] || return 1
+  [[ $output == *"return 503 \"degraded\";"* ]] || return 1
+}
+
+@test "write_health_php writes the health script" {
+  case_body() {
+    RUNTIME_DIR="$CASE_DIR"
+    write_health_php
+    cat "$RUNTIME_DIR/health.php"
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *'<?php'* ]] || return 1
+  [[ $output == *'echo "up";'* ]] || return 1
 }
