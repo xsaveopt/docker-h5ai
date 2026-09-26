@@ -279,3 +279,148 @@ MOUNTS
   [ "$status" -eq 0 ] || return 1
   [ "$output" = "COUNT=0" ] || return 1
 }
+
+write_mountinfo_fixture() {
+  cat > "$CASE_DIR/mountinfo" <<'MOUNTS'
+590 540 0:48 / / rw,relatime master:1 - overlay overlay rw,lowerdir=/l1:/l2,upperdir=/u,workdir=/w
+591 590 0:51 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+610 590 8:1 /srv/files /app/files ro,nosuid,nodev,noexec,relatime master:7 - ext4 /dev/sda1 rw,errors=remount-ro
+611 590 8:1 /srv/cache /app/cache rw,relatime shared:9 - ext4 /dev/sda1 rw,noexec
+612 590 0:60 / /app/my\040files ro,relatime - ext4 /dev/sdb1 rw
+MOUNTS
+}
+
+mount_opt_case() {
+  awk() { command awk "${@:1:$#-1}" "$CASE_DIR/mountinfo"; }
+  printf '[%s]\n' "$(mount_opt "$1" "$2")"
+}
+
+@test "mount_opt finds a per-mount option" {
+  write_mountinfo_fixture
+
+  run in_entrypoint mount_opt_case /app/files ro
+
+  [ "$status" -eq 0 ] || return 1
+  [ "$output" = "[ro]" ] || return 1
+}
+
+@test "mount_opt finds noexec among several options" {
+  write_mountinfo_fixture
+
+  run in_entrypoint mount_opt_case /app/files noexec
+
+  [ "$status" -eq 0 ] || return 1
+  [ "$output" = "[noexec]" ] || return 1
+}
+
+@test "mount_opt ignores superblock options" {
+  write_mountinfo_fixture
+
+  run in_entrypoint mount_opt_case /app/cache noexec
+
+  [ "$status" -eq 0 ] || return 1
+  [ "$output" = "[]" ] || return 1
+}
+
+@test "mount_opt reports nothing for a rw mount" {
+  write_mountinfo_fixture
+
+  run in_entrypoint mount_opt_case /app/cache ro
+
+  [ "$status" -eq 0 ] || return 1
+  [ "$output" = "[]" ] || return 1
+}
+
+@test "mount_opt matches whole options only" {
+  write_mountinfo_fixture
+
+  run in_entrypoint mount_opt_case /app/files atime
+
+  [ "$status" -eq 0 ] || return 1
+  [ "$output" = "[]" ] || return 1
+}
+
+@test "mount_opt matches the whole mount point only" {
+  write_mountinfo_fixture
+
+  run in_entrypoint mount_opt_case /app ro
+
+  [ "$status" -eq 0 ] || return 1
+  [ "$output" = "[]" ] || return 1
+}
+
+@test "mount_opt reports nothing without mountinfo" {
+  case_body() {
+    awk() { return 1; }
+    printf '[%s]\n' "$(mount_opt /app/files ro)"
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [ "$output" = "[]" ] || return 1
+}
+
+@test "mount_opt decodes an escaped space in the mount point" {
+  write_mountinfo_fixture
+
+  run in_entrypoint mount_opt_case "/app/my files" ro
+
+  [ "$status" -eq 0 ] || return 1
+  [ "$output" = "[ro]" ] || return 1
+}
+
+@test "collect_mounts decodes an escaped space in the mount point" {
+  write_mountinfo_fixture
+
+  case_body() {
+    awk() { command awk "$1" "$CASE_DIR/mountinfo"; }
+    REQUIRED_RW=""
+    collect_mounts
+    printf '[%s]\n' "${MOUNTS[@]}"
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [ "$output" = "$(printf '[/app/files]\n[/app/cache]\n[/app/my files]')" ] || return 1
+}
+
+@test "check_rw notes a read-only optional mount without warning" {
+  skip_as_root
+  chmod 500 "$CASE_DIR"
+
+  case_body() {
+    mount_opt() { [ "$2" = ro ] && printf 'ro\n'; return 0; }
+    REQUIRED_RW=""
+    check_rw "$CASE_DIR" "bind mount $CASE_DIR"
+    printf 'FATAL=%s\n' "$FATAL"
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *"$CASE_DIR is read-only [mounted read-only]; skipping (fine if you mounted it ro on purpose)"* ]] || return 1
+  [[ $output != *"WARN"* ]] || return 1
+  [[ $output != *"fix on host"* ]] || return 1
+  [[ $output == *"FATAL=0"* ]] || return 1
+}
+
+@test "check_rw fails a read-only required volume and shows the flag" {
+  skip_as_root
+  chmod 500 "$CASE_DIR"
+
+  case_body() {
+    mount_opt() { [ "$2" = ro ] && printf 'ro\n'; return 0; }
+    REQUIRED_RW="$CASE_DIR"
+    check_rw "$CASE_DIR" "required volume $CASE_DIR"
+    printf 'FATAL=%s\n' "$FATAL"
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *"cannot read+write $CASE_DIR"* ]] || return 1
+  [[ $output == *"mode=500 [mounted read-only]"* ]] || return 1
+  [[ $output == *"FATAL=1"* ]] || return 1
+}

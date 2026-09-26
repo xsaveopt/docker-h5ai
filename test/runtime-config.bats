@@ -299,3 +299,36 @@ base_path_case() {
   [[ $output != *"hunter2"* ]] || return 1
   [[ $output == *"FATAL=0"* ]] || return 1
 }
+
+@test "check_runtime_dir fails when the directory is not writable" {
+  case_body() {
+    RUNTIME_DIR="$CASE_DIR/runtime"
+    touch() { return 1; }
+    check_runtime_dir
+    printf 'FATAL=%s\n' "$FATAL"
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *"$CASE_DIR/runtime is not writable by uid=$(id -u)"* ]] || return 1
+  [[ $output == *"mount a tmpfs at /tmp"* ]] || return 1
+  [[ $output != *"runtime directory ready"* ]] || return 1
+  [[ $output == *"FATAL=1"* ]] || return 1
+}
+
+@test "write_htpasswd exits when the auth file cannot be written" {
+  case_body() {
+    RUNTIME_DIR="$CASE_DIR/absent"
+    HT_PASSWORD=hunter2
+    htpasswd() { printf 'admin:$2y$05$bcrypthash\n'; }
+    write_htpasswd
+    printf 'not reached\n'
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 1 ] || return 1
+  [[ $output == *"cannot write $CASE_DIR/absent/htpasswd as uid=$(id -u)"* ]] || return 1
+  [[ $output != *"not reached"* ]] || return 1
+}

@@ -292,3 +292,118 @@ teardown() {
   [[ $output == *"outbound DNS failed (could not resolve cloudflare.com)"* ]] || return 1
   [[ $output == *"outbound TCP to 127.0.0.1:1 failed; egress may be blocked"* ]] || return 1
 }
+
+write_tcp_fixtures() {
+  cat > "$CASE_DIR/tcp" <<'TCP'
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000    33        0 20001 1 0000000000000000 100 0 0 10 0
+   1: 0100007F:0050 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 20002 1 0000000000000000 100 0 0 10 0
+   2: 0100007F:1F90 0100007F:D431 01 00000000:00000000 00:00000000 00000000    33        0 20003 1 0000000000000000 20 4 30 10 -1
+   3: 00000000:2328 0100007F:A1B2 06 00000000:00000000 03:00001234 00000000     0        0 0 3 0000000000000000
+TCP
+  cat > "$CASE_DIR/tcp6" <<'TCP'
+  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000000000000:1F90 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000    33        0 20004 1 0000000000000000 100 0 0 10 0
+   1: 00000000000000000000000000000000:23F0 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 20005 1 0000000000000000 100 0 0 10 0
+   2: 0000000000000000FFFF00000100007F:2710 0000000000000000FFFF00000100007F:C350 01 00000000:00000000 00:00000000 00000000     0        0 20006 1 0000000000000000 20 4 30 10 -1
+TCP
+}
+
+@test "listening_ports decodes listening sockets from tcp and tcp6" {
+  write_tcp_fixtures
+
+  case_body() {
+    awk() { command awk "$1" "$CASE_DIR/tcp" "$CASE_DIR/tcp6"; }
+    listening_ports
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [ "$output" = "$(printf '80\n8080\n9200')" ] || return 1
+}
+
+@test "listening_ports is empty when nothing listens" {
+  printf '  sl  local_address rem_address   st\n   0: 0100007F:1F90 0100007F:D431 01 00000000:00000000\n' > "$CASE_DIR/tcp"
+  : > "$CASE_DIR/tcp6"
+
+  case_body() {
+    awk() { command awk "$1" "$CASE_DIR/tcp" "$CASE_DIR/tcp6"; }
+    listening_ports
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+}
+
+@test "check_ports warns from real-format socket tables" {
+  write_tcp_fixtures
+
+  case_body() {
+    awk() { command awk "$1" "$CASE_DIR/tcp" "$CASE_DIR/tcp6"; }
+    PORTS_INTERNAL="8080 9000"
+    check_ports
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *"port 8080 is already in use"* ]] || return 1
+  [[ $output != *"port 9000"* ]] || return 1
+}
+
+@test "check_clock notes an unset timezone only without localtime" {
+  case_body() {
+    date() {
+      case "${2:-}" in
+        +%Y) printf '2026\n' ;;
+        *) command date "$@" ;;
+      esac
+    }
+    unset TZ
+    check_clock
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  if [ -e /etc/localtime ]; then
+    [ -z "$output" ] || return 1
+  else
+    [[ $output == *"timezone not configured (TZ unset, no /etc/localtime); timestamps will be UTC"* ]] || return 1
+  fi
+}
+
+@test "check_net reports a working TCP connection" {
+  command -v python3 >/dev/null 2>&1 || skip "python3 is not available"
+  python3 -c 'import socket,sys,time
+s=socket.socket()
+s.bind(("127.0.0.1",0))
+s.listen(4)
+open(sys.argv[1]+".tmp","w").write(str(s.getsockname()[1]))
+import os
+os.rename(sys.argv[1]+".tmp",sys.argv[1])
+time.sleep(20)' "$CASE_DIR/port" 3>&- &
+  LISTENER_PID=$!
+  local i
+  for i in $(seq 1 50); do [ -s "$CASE_DIR/port" ] && break; sleep 0.1; done
+  export LISTEN_PORT="$(cat "$CASE_DIR/port")"
+
+  case_body() {
+    getent() { return 0; }
+    PREFLIGHT_NET_CHECK=1
+    NET_TCP_TARGET="127.0.0.1:${LISTEN_PORT}"
+    check_net
+  }
+
+  run in_entrypoint case_body
+  kill "$LISTENER_PID" 2>/dev/null || true
+  wait "$LISTENER_PID" 2>/dev/null || true
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *"outbound DNS OK"* ]] || return 1
+  [[ $output == *"outbound TCP OK (connected 127.0.0.1:${LISTEN_PORT})"* ]] || return 1
+  [[ $output != *"WARN"* ]] || return 1
+}
