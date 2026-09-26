@@ -44,8 +44,16 @@ jobs:
           provenance: false
           sbom: false
           push: false
+          load: true
+          tags: docker-h5ai:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Container smoke tests
+        run: bats test/smoke.bats
+        env:
+          H5AI_IMAGE: docker-h5ai:ci
 
   publish-dev:
     name: Publish :dev image
