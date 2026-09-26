@@ -16,6 +16,11 @@ new_case_dir() {
   CASE_DIR="$(mktemp -d "$REPO_ROOT/.tmp/entrypoint-tests.XXXXXX")"
 }
 
+reset_runtime_dir() {
+  chmod -R u+rwX /tmp/h5ai 2>/dev/null || true
+  rm -rf /tmp/h5ai
+}
+
 remove_case_dir() {
   [ -n "${CASE_DIR:-}" ] || return 0
   chmod -R u+rwX "$CASE_DIR" 2>/dev/null || true
@@ -72,7 +77,6 @@ run_main() {
   (
     export ENTRYPOINT_SOURCE_ONLY=0
     export PATH="$STUB_BIN:$PATH"
-    export RUNTIME_DIR="${RUNTIME_DIR:-$CASE_DIR/runtime}"
     "$@"
   ) 2>&1 </dev/null
 }

@@ -2,11 +2,13 @@ setup() {
   load helper
   new_case_dir
   make_stubs
+  reset_runtime_dir
   export HT_PASSWORD=hunter2
   unset BASE_PATH PREFLIGHT_NET_CHECK NGINX_DELAY NGINX_EXIT PHP_FPM_EXIT NGINX_TEST_STATUS NGINX_TEST_OUTPUT
 }
 
 teardown() {
+  reset_runtime_dir
   remove_case_dir
 }
 
@@ -21,7 +23,7 @@ teardown() {
   [[ $output == *"does not change ownership of your mounts"* ]] || return 1
   [[ $output != *"launching services"* ]] || return 1
   [ ! -s "$STUB_LOG" ] || return 1
-  [ ! -e "$CASE_DIR/runtime/htpasswd" ] || return 1
+  [ ! -e /tmp/h5ai/htpasswd ] || return 1
 }
 
 @test "main refuses to start on an invalid base path" {
@@ -37,28 +39,26 @@ teardown() {
 
 @test "main refuses to start when the runtime dir cannot be created" {
   skip_as_root
-  mkdir "$CASE_DIR/locked"
-  chmod 500 "$CASE_DIR/locked"
-  export RUNTIME_DIR="$CASE_DIR/locked/runtime"
+  : > /tmp/h5ai
 
   run entrypoint_main
 
   [ "$status" -eq 1 ] || return 1
-  [[ $output == *"cannot create $CASE_DIR/locked/runtime"* ]] || return 1
+  [[ $output == *"cannot create /tmp/h5ai"* ]] || return 1
   [[ $output == *"preflight failed; refusing to start"* ]] || return 1
   [ ! -s "$STUB_LOG" ] || return 1
 }
 
 @test "main refuses to start when the runtime dir exists but cannot be taken over" {
   skip_as_root
-  mkdir -p "$CASE_DIR/runtime"
-  chmod 500 "$CASE_DIR/runtime"
+  mkdir -p /tmp/h5ai
+  chmod 500 /tmp/h5ai
   stub_command chmod 'printf "chmod: changing permissions of %s: Operation not permitted\n" "$2" >&2; exit 1'
 
   run entrypoint_main
 
   [ "$status" -eq 1 ] || return 1
-  [[ $output == *"$CASE_DIR/runtime is not writable by uid=$(id -u)"* ]] || return 1
+  [[ $output == *"/tmp/h5ai is not writable by uid=$(id -u)"* ]] || return 1
   [[ $output == *"preflight failed; refusing to start"* ]] || return 1
 }
 
@@ -117,9 +117,9 @@ teardown() {
 
   run entrypoint_main
 
-  [ -f "$CASE_DIR/runtime/server.conf" ] || return 1
-  [ -f "$CASE_DIR/runtime/health.php" ] || return 1
-  [ "$(cat "$CASE_DIR/runtime/htpasswd")" = 'admin:$2y$05$stubhash' ] || return 1
+  [ -f /tmp/h5ai/server.conf ] || return 1
+  [ -f /tmp/h5ai/health.php ] || return 1
+  [ "$(cat /tmp/h5ai/htpasswd)" = 'admin:$2y$05$stubhash' ] || return 1
   [ "$(head -n 2 "$STUB_LOG")" = "$(printf 'htpasswd -nbB\nnginx -p /etc/nginx -c nginx.conf -t')" ] || return 1
 }
 

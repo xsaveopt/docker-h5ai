@@ -11,7 +11,7 @@ ENV_SECRET="HT_PASSWORD"
 NET_DNS_TARGET="cloudflare.com"
 NET_TCP_TARGET="1.1.1.1:443"
 
-RUNTIME_DIR="${RUNTIME_DIR:-/tmp/h5ai}"
+RUNTIME_DIR=/tmp/h5ai
 CACHE_DIR=/app/_h5ai/public/cache
 
 UID_IN=$(id -u)
@@ -48,7 +48,7 @@ if [ -r /proc/self/uid_map ]; then
 fi
 
 mount_opt() {
-  awk -v p="$1" -v o="$2" '$5==p { n=split($6,a,","); for(i=1;i<=n;i++) if(a[i]==o){print o; exit} }' /proc/self/mountinfo 2>/dev/null
+  awk -v p="$1" -v o="$2" 'function unesc(s) { gsub(/\\040/, " ", s); gsub(/\\134/, "\\", s); return s } unesc($5)==p { n=split($6,a,","); for(i=1;i<=n;i++) if(a[i]==o){print o; exit} }' /proc/self/mountinfo 2>/dev/null
 }
 
 is_system_fs() {
@@ -244,7 +244,7 @@ check_runtime_dir() {
     note "if you run with a read-only root filesystem, mount a tmpfs at /tmp"
     return 0
   fi
-  chmod 700 "${RUNTIME_DIR}"
+  chmod 700 "${RUNTIME_DIR}" 2>/dev/null || true
   if ! touch "${RUNTIME_DIR}/.write-test" 2>/dev/null; then
     fail "${RUNTIME_DIR} is not writable by uid=${UID_IN}"
     note "if you run with a read-only root filesystem, mount a tmpfs at /tmp"
@@ -278,7 +278,7 @@ collect_mounts() {
     is_system_path "$mp" && continue
     seen["$mp"]=1
     MOUNTS+=("$mp")
-  done < <(awk '{ s=0; for(i=1;i<=NF;i++) if($i=="-"){s=i;break} if(s) print $5 "\t" $(s+1) }' /proc/self/mountinfo 2>/dev/null)
+  done < <(awk '{ s=0; for(i=1;i<=NF;i++) if($i=="-"){s=i;break} if(s) { mp=$5; gsub(/\\040/, " ", mp); gsub(/\\134/, "\\", mp); print mp "\t" $(s+1) } }' /proc/self/mountinfo 2>/dev/null)
 }
 
 write_htpasswd() {

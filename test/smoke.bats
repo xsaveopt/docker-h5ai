@@ -131,10 +131,16 @@ http_code() {
   [[ $output == *"preflight failed; refusing to start"* ]] || return 1
 }
 
-@test "smoke: an overridden RUNTIME_DIR still serves" {
+@test "smoke: a set RUNTIME_DIR is ignored and the container still serves" {
   start_h5ai -e HT_PASSWORD="$SMOKE_PASSWORD" -e RUNTIME_DIR=/tmp/h5ai-runtime
   wait_for "http://$ADDR:8080/health"
 
   [ "$(http_code "http://$ADDR:8080/")" = "401" ] || return 1
   [ "$(http_code -u "admin:$SMOKE_PASSWORD" "http://$ADDR:8080/")" = "200" ] || return 1
+
+  run docker logs "$CID"
+  [[ $output == *"runtime directory ready (/tmp/h5ai)"* ]] || return 1
+
+  run docker exec "$CID" sh -c 'test -e /tmp/h5ai/server.conf && test ! -e /tmp/h5ai-runtime'
+  [ "$status" -eq 0 ] || return 1
 }
