@@ -191,3 +191,104 @@ teardown() {
   [ "$status" -eq 0 ] || return 1
   [ -z "$output" ] || return 1
 }
+
+@test "check_caps notes an all-dropped set" {
+  printf 'Name:\tbash\nCapInh:\t0000000000000000\nCapEff:\t0000000000000000\n' > "$CASE_DIR/status"
+
+  case_body() {
+    awk() { command awk "$1" "$CASE_DIR/status"; }
+    check_caps
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *"capabilities: all dropped (CapEff=0000000000000000); good"* ]] || return 1
+  [[ $output != *"WARN"* ]] || return 1
+}
+
+@test "check_caps notes the docker default set" {
+  printf 'Name:\tbash\nCapEff:\t00000000a80425fb\n' > "$CASE_DIR/status"
+
+  case_body() {
+    awk() { command awk "$1" "$CASE_DIR/status"; }
+    check_caps
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *"capabilities: docker default set only (chown dac_override fowner fsetid kill setgid setuid setpcap net_bind_service net_raw sys_chroot mknod audit_write setfcap)"* ]] || return 1
+  [[ $output != *"WARN"* ]] || return 1
+}
+
+@test "check_caps warns on capabilities beyond the default" {
+  printf 'Name:\tbash\nCapEff:\t000000c0a82435fb\n' > "$CASE_DIR/status"
+
+  case_body() {
+    awk() { command awk "$1" "$CASE_DIR/status"; }
+    check_caps
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *"elevated capabilities present beyond the docker default: net_admin sys_admin perfmon bpf"* ]] || return 1
+  [[ $output == *"cap_drop"* ]] || return 1
+}
+
+@test "check_caps notes an unreadable status" {
+  case_body() {
+    awk() { return 1; }
+    check_caps
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *"capabilities: could not read /proc/self/status"* ]] || return 1
+}
+
+@test "check_net skips unless enabled" {
+  case_body() {
+    getent() { printf 'called\n'; }
+    unset PREFLIGHT_NET_CHECK
+    check_net
+    PREFLIGHT_NET_CHECK=0
+    check_net
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [ -z "$output" ] || return 1
+}
+
+@test "check_net reports working DNS" {
+  case_body() {
+    getent() { [ "$1 $2" = "hosts cloudflare.com" ]; }
+    PREFLIGHT_NET_CHECK=1
+    NET_TCP_TARGET="127.0.0.1:1"
+    check_net
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *"outbound DNS OK (resolved cloudflare.com)"* ]] || return 1
+}
+
+@test "check_net warns on failed DNS and TCP" {
+  case_body() {
+    getent() { return 2; }
+    PREFLIGHT_NET_CHECK=1
+    NET_TCP_TARGET="127.0.0.1:1"
+    check_net
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *"outbound DNS failed (could not resolve cloudflare.com)"* ]] || return 1
+  [[ $output == *"outbound TCP to 127.0.0.1:1 failed; egress may be blocked"* ]] || return 1
+}

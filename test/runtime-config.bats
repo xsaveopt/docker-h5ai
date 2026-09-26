@@ -256,3 +256,46 @@ base_path_case() {
   [[ $output == *'<?php'* ]] || return 1
   [[ $output == *'echo "up";'* ]] || return 1
 }
+
+@test "check_auth fails without a password" {
+  case_body() {
+    unset HT_PASSWORD
+    check_auth
+    printf 'FATAL=%s\n' "$FATAL"
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *"HT_PASSWORD is not set"* ]] || return 1
+  [[ $output == *"-e HT_PASSWORD="* ]] || return 1
+  [[ $output == *"FATAL=1"* ]] || return 1
+}
+
+@test "check_auth fails on an empty password" {
+  case_body() {
+    HT_PASSWORD=""
+    check_auth
+    printf 'FATAL=%s\n' "$FATAL"
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *"FATAL=1"* ]] || return 1
+}
+
+@test "check_auth accepts a set password" {
+  case_body() {
+    HT_PASSWORD=hunter2
+    check_auth
+    printf 'FATAL=%s\n' "$FATAL"
+  }
+
+  run in_entrypoint case_body
+
+  [ "$status" -eq 0 ] || return 1
+  [[ $output == *"basic auth configured for user admin"* ]] || return 1
+  [[ $output != *"hunter2"* ]] || return 1
+  [[ $output == *"FATAL=0"* ]] || return 1
+}
